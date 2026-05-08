@@ -1240,11 +1240,39 @@ export class CodexConverter extends BaseConverter {
                 outputText: '',
                 hasText: false,
                 messageItemId: null,
+                messageOutputIndex: null,
+                nextOutputIndex: 0,
                 functionCalls: []
             });
         }
         const state = this.streamParams.get(resId);
         const events = [];
+        const getMessageOutputIndex = () => {
+            if (state.messageOutputIndex === null || state.messageOutputIndex === undefined) {
+                state.messageOutputIndex = state.nextOutputIndex++;
+            }
+            return state.messageOutputIndex;
+        };
+        const patchTextOutputIndex = (event) => {
+            if (event && typeof event === 'object') {
+                event.output_index = getMessageOutputIndex();
+            }
+            return event;
+        };
+        const ensureTextLifecycleStarted = () => {
+            const textEvents = [];
+            if (!state.eventsSent.has('output_item_added')) {
+                const added = patchTextOutputIndex(generateOutputItemAdded(state.responseID));
+                state.messageItemId = added.item?.id || state.messageItemId;
+                textEvents.push(added);
+                state.eventsSent.add('output_item_added');
+            }
+            if (!state.eventsSent.has('content_part_added')) {
+                textEvents.push(patchTextOutputIndex(generateContentPartAdded(state.responseID)));
+                state.eventsSent.add('content_part_added');
+            }
+            return textEvents;
+        };
 
         if (type === 'response.created') {
             state.responseID = chunk.response.id;
@@ -1266,20 +1294,11 @@ export class CodexConverter extends BaseConverter {
         }
 
         if (type === 'response.output_text.delta') {
-            if (!state.eventsSent.has('output_item_added')) {
-                const added = generateOutputItemAdded(state.responseID);
-                state.messageItemId = added.item?.id || state.messageItemId;
-                events.push(added);
-                state.eventsSent.add('output_item_added');
-            }
-            if (!state.eventsSent.has('content_part_added')) {
-                events.push(generateContentPartAdded(state.responseID));
-                state.eventsSent.add('content_part_added');
-            }
+            events.push(...ensureTextLifecycleStarted());
             const delta = typeof chunk.delta === 'string' ? chunk.delta : '';
             state.outputText += delta;
             state.hasText = true;
-            events.push(generateOutputTextDelta(state.responseID, delta));
+            events.push(patchTextOutputIndex(generateOutputTextDelta(state.responseID, delta)));
             return events;
         }
 
@@ -1301,7 +1320,7 @@ export class CodexConverter extends BaseConverter {
                 name: this.getOriginalToolName(chunk.item.name),
                 arguments: '{}',
                 status: 'in_progress',
-                output_index: chunk.output_index ?? state.functionCalls.length,
+                output_index: state.nextOutputIndex++,
                 hasArgsDelta: false
             };
             state.functionCalls.push(call);
@@ -1345,7 +1364,7 @@ export class CodexConverter extends BaseConverter {
                     name: this.getOriginalToolName(chunk.item.name),
                     arguments: args,
                     status: 'in_progress',
-                    output_index: chunk.output_index ?? state.functionCalls.length,
+                    output_index: state.nextOutputIndex++,
                     hasArgsDelta: false
                 };
                 state.functionCalls.push(call);
@@ -1395,9 +1414,10 @@ export class CodexConverter extends BaseConverter {
         if (type === 'response.completed') {
             if (state.hasText && !state.eventsSent.has('text_done')) {
                 events.push(
-                    generateOutputTextDone(state.responseID),
-                    generateContentPartDone(state.responseID),
-                    generateOutputItemDone(state.responseID)
+                    ...ensureTextLifecycleStarted(),
+                    patchTextOutputIndex(generateOutputTextDone(state.responseID)),
+                    patchTextOutputIndex(generateContentPartDone(state.responseID)),
+                    patchTextOutputIndex(generateOutputItemDone(state.responseID))
                 );
                 state.eventsSent.add('text_done');
             }
