@@ -1,9 +1,46 @@
 import axios from 'axios';
 import logger from '../../utils/logger.js';
+import { existsSync, readFileSync } from 'fs';
 import * as http from 'http';
 import * as https from 'https';
 import { configureAxiosProxy, configureTLSSidecar, isTLSSidecarEnabledForProvider } from '../../utils/proxy-utils.js';
 import { MODEL_PROVIDER, getRetryAfterMs } from '../../utils/common.js';
+import { normalizeModelIds } from '../provider-models.js';
+
+function getProviderType(config) {
+    const providerType = config?.MODEL_PROVIDER;
+    if (typeof providerType === 'string' &&
+        (providerType === MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES || providerType.startsWith(MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES + '-'))) {
+        return providerType;
+    }
+
+    return MODEL_PROVIDER.OPENAI_CUSTOM_RESPONSES;
+}
+
+function getManagedModelsFromPools(config, providerType) {
+    const pools = config?.providerPools;
+    const providerEntries = Array.isArray(pools?.[providerType]) ? pools[providerType] : [];
+    const poolModels = providerEntries.flatMap(provider => Array.isArray(provider?.supportedModels) ? provider.supportedModels : []);
+
+    if (poolModels.length > 0) {
+        return normalizeModelIds(poolModels);
+    }
+
+    const filePath = config?.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+    if (!existsSync(filePath)) {
+        return [];
+    }
+
+    try {
+        const filePools = JSON.parse(readFileSync(filePath, 'utf-8'));
+        const fileEntries = Array.isArray(filePools?.[providerType]) ? filePools[providerType] : [];
+        const fileModels = fileEntries.flatMap(provider => Array.isArray(provider?.supportedModels) ? provider.supportedModels : []);
+        return normalizeModelIds(fileModels);
+    } catch (error) {
+        logger.warn(`[OpenAIResponses] Failed to load provider pool models from ${filePath}: ${error.message}`);
+        return [];
+    }
+}
 
 // OpenAI Responses API specification service for interacting with third-party models
 export class OpenAIResponsesApiService {
@@ -52,6 +89,25 @@ export class OpenAIResponsesApiService {
 
         this.axiosInstance = axios.create(axiosConfig);
 
+    }
+
+    getAllowedModels() {
+        const providerType = getProviderType(this.config);
+        const directModels = normalizeModelIds(this.config?.supportedModels);
+        if (directModels.length > 0) {
+            return directModels;
+        }
+
+        return getManagedModelsFromPools(this.config, providerType);
+    }
+
+    ensureModelIsAllowed(model) {
+        const allowedModels = this.getAllowedModels();
+        if (allowedModels.length > 0 && model && !allowedModels.includes(model)) {
+            const error = new Error(`Model '${model}' is not enabled for ${getProviderType(this.config)}. Allowed models: ${allowedModels.join(', ')}`);
+            error.status = 400;
+            throw error;
+        }
     }
 
     _applySidecar(axiosConfig) {
@@ -189,6 +245,8 @@ export class OpenAIResponsesApiService {
     }
 
     async generateContent(model, requestBody) {
+        this.ensureModelIsAllowed(model);
+
         // 临时存储 monitorRequestId
         if (requestBody._monitorRequestId) {
             this.config._monitorRequestId = requestBody._monitorRequestId;
@@ -202,6 +260,8 @@ export class OpenAIResponsesApiService {
     }
 
     async *generateContentStream(model, requestBody) {
+        this.ensureModelIsAllowed(model);
+
         // 临时存储 monitorRequestId
         if (requestBody._monitorRequestId) {
             this.config._monitorRequestId = requestBody._monitorRequestId;
@@ -215,6 +275,19 @@ export class OpenAIResponsesApiService {
     }
 
     async listModels() {
+        const allowedModels = this.getAllowedModels();
+        if (allowedModels.length > 0) {
+            return {
+                object: 'list',
+                data: allowedModels.map(modelId => ({
+                    id: modelId,
+                    object: 'model',
+                    created: Math.floor(Date.now() / 1000),
+                    owned_by: getProviderType(this.config)
+                }))
+            };
+        }
+
         try {
             const axiosConfig = {
                 method: 'get',
