@@ -15,6 +15,7 @@ import {
 } from '../utils/provider-utils.js';
 import { withFileLock, atomicWriteFile } from '../utils/file-lock.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
+import { getConfiguredSupportedModels } from '../providers/provider-models.js';
 
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
