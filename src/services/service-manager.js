@@ -387,6 +387,19 @@ async function _resolveEffectiveRouting(config, requestedModel) {
 
     // 1. 处理显式前缀 (无论是否是 AUTO 模式都支持)
     if (requestedModel && requestedModel.includes(':')) {
+        const configuredModels = providerPoolManager && effectiveProvider
+            ? providerPoolManager.providerStatus?.[effectiveProvider]
+                ?.flatMap(providerStatus => getConfiguredSupportedModels(effectiveProvider, providerStatus.config)) || []
+            : [];
+
+        // Some OpenAI-compatible model IDs legitimately contain ':'
+        // (for example local GGUF aliases like qwen...:instruct).  Do not
+        // treat the first segment as a provider prefix when the current pool
+        // explicitly lists the full model ID.
+        if (configuredModels.includes(requestedModel)) {
+            return { effectiveProvider, actualModelName };
+        }
+
         const [prefix, ...modelParts] = requestedModel.split(':');
         const modelSuffix = modelParts.join(':');
         // 检查前缀是否是有效的提供商标识
