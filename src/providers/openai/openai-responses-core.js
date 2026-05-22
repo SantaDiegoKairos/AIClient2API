@@ -163,6 +163,59 @@ export class OpenAIResponsesApiService {
         }
     }
 
+    _sanitizeRequestBody(body) {
+        // OpenAI Responses API include parameter is not supported by all backends (e.g. GLM).
+        // Strip it to prevent hangs/timeouts on third-party Responses-compatible providers.
+        if (body && typeof body === 'object') {
+            delete body.include;
+            if (this._isMaxDanApiBackend()) {
+                this._sanitizeMaxDanApiRequestBody(body);
+            }
+        }
+        return body;
+    }
+
+    _isMaxDanApiBackend() {
+        const provider = String(this.config?.MODEL_PROVIDER || '');
+        const customName = String(this.config?.customName || '');
+        const baseUrl = String(this.baseUrl || '');
+        return provider === 'openaiResponses-custom-maxdanapi'
+            || customName.toLowerCase() === 'maxdanapi'
+            || baseUrl.includes('107.172.62.211.sslip.io');
+    }
+
+    _sanitizeMaxDanApiRequestBody(body) {
+        // MAXDANAPI accepts a Codex-flavored streaming Responses subset.
+        delete body.max_output_tokens;
+        body.store = false;
+
+        if (!body.instructions || typeof body.instructions !== 'string') {
+            body.instructions = 'You are a concise assistant.';
+        }
+
+        if (typeof body.input === 'string') {
+            body.input = [{
+                role: 'user',
+                content: [{ type: 'input_text', text: body.input }]
+            }];
+        }
+    }
+
+    async _callStreamingResponsesAsUnary(requestBody) {
+        let finalResponse = null;
+        for await (const chunk of this.streamApi('/responses', requestBody)) {
+            if (chunk?.type === 'response.completed' && chunk.response) {
+                finalResponse = chunk.response;
+            } else if (chunk?.response?.status === 'completed') {
+                finalResponse = chunk.response;
+            }
+        }
+        if (!finalResponse) {
+            throw new Error('Streaming Responses request finished without a completed response.');
+        }
+        return finalResponse;
+    }
+
     async generateContent(model, requestBody) {
         // 临时存储 monitorRequestId
         if (requestBody._monitorRequestId) {
@@ -173,6 +226,10 @@ export class OpenAIResponsesApiService {
             delete requestBody._requestBaseUrl;
         }
 
+        this._sanitizeRequestBody(requestBody);
+        if (this._isMaxDanApiBackend()) {
+            return this._callStreamingResponsesAsUnary(requestBody);
+        }
         return this.callApi('/responses', requestBody);
     }
 
@@ -186,6 +243,7 @@ export class OpenAIResponsesApiService {
             delete requestBody._requestBaseUrl;
         }
 
+        this._sanitizeRequestBody(requestBody);
         yield* this.streamApi('/responses', requestBody);
     }
 
