@@ -293,7 +293,16 @@ export class CodexApiService {
                 error.skipErrorCount = true;
                 throw error;
             } else {
-                logger.error(`[Codex] Error calling streaming API (Status: ${error.response?.status}, Code: ${error.code || 'N/A'}):`, error.message);
+                let errBody = '';
+                try {
+                    if (error.response?.data) {
+                        errBody = typeof error.response.data === 'string' ? error.response.data : JSON.stringify(error.response.data);
+                    }
+                } catch (_) {
+                    errBody = '';
+                }
+                const bodySuffix = errBody ? ` | body: ${errBody.slice(0, 1200)}` : '';
+                logger.error(`[Codex] Error calling streaming API (Status: ${error.response?.status}, Code: ${error.code || 'N/A'}): ${error.message}${bodySuffix}`);
                 throw error;
             }
         }
@@ -733,6 +742,7 @@ export class CodexApiService {
                             if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
                                 error.shouldSwitchCredential = true;
                                 error.skipErrorCount = true;
+                                error.response = error.response || { status: 429, headers: {}, data: { retryAfterMs: this.config.RATE_LIMIT_COOLDOWN_MS || 18000000, error: parsed.error || parsed } };
                             }
                             throw error;
                         }
@@ -783,6 +793,7 @@ export class CodexApiService {
                         if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
                             error.shouldSwitchCredential = true;
                             error.skipErrorCount = true;
+                            error.response = error.response || { status: 429, headers: {}, data: { retryAfterMs: this.config.RATE_LIMIT_COOLDOWN_MS || 18000000, error: parsed.error || parsed } };
                         }
                         throw error;
                     }
@@ -860,6 +871,7 @@ export class CodexApiService {
                         if (parsed.error?.code === 'insufficient_quota' || parsed.error?.type === 'insufficient_quota') {
                             error.shouldSwitchCredential = true;
                             error.skipErrorCount = true;
+                            error.response = error.response || { status: 429, headers: {}, data: { retryAfterMs: this.config.RATE_LIMIT_COOLDOWN_MS || 18000000, error: parsed.error || parsed } };
                         }
                         throw error;
                     case 'response.output_item.added':

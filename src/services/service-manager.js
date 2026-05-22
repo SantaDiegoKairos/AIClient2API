@@ -191,6 +191,14 @@ async function linkSingleCredential(config, credPath) {
             defaultCheckModel,
             needsProjectId
         });
+
+        if (providerType === 'openai-codex-oauth' && config.PROXY_URL) {
+            newProvider.PROXY_URL = config.PROXY_URL;
+            newProvider.PROXY_ENABLED_PROVIDERS = ['openai-codex-oauth'];
+            newProvider.TLS_SIDECAR_ENABLED = false;
+            newProvider.TLS_SIDECAR_ENABLED_PROVIDERS = [];
+            newProvider.TLS_SIDECAR_PROXY_URL = null;
+        }
         
         // 添加到配置
         config.providerPools[providerType].push(newProvider);
